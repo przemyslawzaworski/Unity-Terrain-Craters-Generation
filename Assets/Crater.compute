@@ -1,0 +1,72 @@
+#pragma kernel CSMain
+
+int _Shape, _Steps;
+float _Amplitude, _Border, _Depth, _Radius, _Seed, _Smoothness;
+float2 _Center;
+RWTexture2D<float> _RenderTexture;
+
+float Circle (float2 p, float2 c, float r)
+{
+	float d = length(p - c);
+	return (d <= r) ? sqrt(r * r - d * d) : 0.0;
+}
+
+float Hash (float2 n) 
+{
+	return frac(sin(dot(n, float2(13.9898, 4.1414))) * 43758.5453);
+}
+
+float Noise (float2 p) // bilinear noise
+{
+	float size = 256.0;
+	float i = (1.0 / size);
+	float2 pixel = p * size + 0.5;
+	float2 f = frac(pixel);
+	float2 cell = floor(pixel) / size - (float2)(i / 2.0);
+	float a = Hash(cell + float2(0, 0));
+	float b = Hash(cell + float2(i, 0));
+	float c = Hash(cell + float2(0, i));
+	float d = Hash(cell + float2(i, i));
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+float Fbm (float2 p) // fractal noise
+{
+	float a = 0.5, b = 0.0, t = 0.0;
+	for (int i = 0; i < 7; i++)
+	{
+		b *= a; t *= a;
+		b += Noise(p);
+		t += 1.0; p /= 2.0;
+	}
+	return b /= t;
+}
+
+float Sdf (float2 p, int steps, float seed, float smoothness) // signed distance field
+{
+	float d = length(p) - 0.95;
+	for(int i = 0; i < steps; i++)
+	{
+		float j = float(i) + seed;
+		float r = 2.5 + frac(sin(j * 727.1) * 435.545);
+		float2 v = normalize(frac(sin(float2(127.231, 491.7) * j) * 435.543) * 2.0 - 1.0);
+		float a = d;
+		float b = length(p + v * r) - r * 0.8;
+		float k = smoothness;
+		float h = clamp(0.5 + 0.5 * (-b - a) / k, 0.0, 1.0);
+		d = lerp(a, -b, h) + k * h * (1.0 - h);
+	}
+	return d;
+}
+
+[numthreads(8, 8, 1)]
+void CSMain ( uint3 id : SV_DispatchThreadID )
+{
+	float2 resolution = float2(_Radius, _Radius) * 2.0;
+	float circle = Circle(id.xy / resolution, float2(0.5, 0.5), 0.499);
+	float contour = Sdf(id.xy / resolution * 2.0 - 1.0, _Steps, _Seed, _Smoothness);
+	float surface = Fbm((id.xy + _Seed.xx) * _Amplitude);
+	float map = abs(contour * surface * _Depth) - _Border;
+	float height = (_Shape == 1) ? ((contour < 0.0) ? map : min(0.0, map)) : circle * _Depth;
+	_RenderTexture[id.xy] -= height;
+}
